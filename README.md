@@ -32,7 +32,7 @@ Set `ADMIN_WHATSAPP_JID` in `.env` to make `daily brief` and `add reminders` ava
 
 For a confirmed meeting that has attendee emails, Joe stores local WhatsApp reminders for the requester at **one hour** and **ten minutes** before the meeting. The prototype must remain running for the scheduler to deliver them; production should use a durable queue and hosted worker.
 
-Events not created by Joe can also trigger reminders. In Make, use **Google Calendar → Watch Events**, followed by an **HTTP → Make a request** module that posts to Joe’s `POST /calendar-events` endpoint with the `x-joe-secret` header. Map `event_id`, `meeting_title`, `start_time`, `end_time`, and the event's `attendees` array.
+Events not created by Joe can also trigger reminders. In Make, use **Google Calendar → Watch Events**, followed by an **HTTP → Make a request** module that posts to Joe’s `POST /calendar-events` endpoint. Map `event_id`, `meeting_title`, `start_time`, `end_time`, and the event's `attendees` array.
 
 For this one-calendar demo, set `MAIN_USER_EMAIL` to the main Joe user's email address. Joe queues a WhatsApp reminder only if that address appears in the watched event's attendees. All other events are safely ignored with `queued: false`. Reminders go only to `ADMIN_WHATSAPP_JID`; no attendee needs a QR, Google login, or Make account.
 

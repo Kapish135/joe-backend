@@ -11,8 +11,6 @@ services:
         value: Asia/Kolkata
       - key: MAKE_WEBHOOK_URL
         sync: false
-      - key: MAKE_INGEST_SECRET
-        sync: false
       - key: ADMIN_WHATSAPP_JID
         sync: false
       - key: MAIN_USER_EMAIL

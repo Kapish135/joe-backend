@@ -19,7 +19,6 @@ const webhookUrl = process.env.MAKE_WEBHOOK_URL;
 const timezone = process.env.TIMEZONE || 'Asia/Kolkata';
 const adminJid = process.env.ADMIN_WHATSAPP_JID || '';
 const mainUserEmail = process.env.MAIN_USER_EMAIL?.trim().toLowerCase() || '';
-const makeIngestSecret = process.env.MAKE_INGEST_SECRET || '';
 const dashboardToken = process.env.DASHBOARD_TOKEN || '';
 const pendingEvents = new Map();
 const pendingDrafts = new Map();
@@ -529,10 +528,6 @@ http.createServer(async (request, response) => {
     return;
   }
   if (request.method === 'POST' && request.url === '/calendar-events') {
-    if (!makeIngestSecret || request.headers['x-joe-secret'] !== makeIngestSecret) {
-      response.writeHead(401).end('Unauthorized');
-      return;
-    }
     try {
       let body = '';
       for await (const chunk of request) body += chunk;
