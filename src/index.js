@@ -326,7 +326,12 @@ async function createInCalendar(event) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         meeting_title: event.meeting_title,
-        attendees: event.attendees,
+        // Make's Google Calendar "Attendees" field is a collection of
+        // attendee objects, rather than a simple array of email strings.
+        // Keep that shape at the integration boundary while Joe uses plain
+        // email strings internally for conversation and reminder logic.
+        attendees: event.attendees.map((email) => ({ email })),
+        attendee_emails: event.attendees,
         start_time: event.start_time,
         end_time: event.end_time
       }),
