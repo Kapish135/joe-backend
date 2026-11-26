@@ -1,0 +1,10 @@
+services:
+  joe:
+    build: .
+    env_file: .env
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./auth_info:/app/auth_info
+      - ./data:/app/data
+    restart: unless-stopped
