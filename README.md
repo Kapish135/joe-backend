@@ -64,4 +64,6 @@ docker compose logs -f joe
 
 The compose volumes preserve `auth_info/` (the one Joe WhatsApp link) and `data/` (queued reminders) when the container restarts. Put an HTTPS reverse proxy in front of the service and change Make's HTTP URL to `https://your-domain/calendar-events`. Set a long `DASHBOARD_TOKEN`; the initial link page is then available only at `https://your-domain/qr?token=YOUR_DASHBOARD_TOKEN`.
 
+For a no-cost Render case demo, the included `render.yaml` uses the free plan without a persistent disk. Joe works while the instance is live, but Render can sleep the service and any restart/redeploy requires linking the Joe WhatsApp account again. Use a persistent disk or database-backed session store before relying on reminders in production.
+
 For real customer handover, replace Baileys with the official Meta WhatsApp Cloud API, use a database and durable job queue, and collect explicit messaging consent. This Baileys build is suitable only for a personal demo, not a customer-facing production service.

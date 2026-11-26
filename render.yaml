@@ -2,19 +2,13 @@ services:
   - type: web
     name: joe-calendar-whatsapp
     runtime: docker
-    plan: 0.5c-512mb
+    plan: free
     healthCheckPath: /health
-    disk:
-      name: joe-persistent-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PORT
         value: "10000"
       - key: TIMEZONE
         value: Asia/Kolkata
-      - key: PERSISTENT_DATA_DIR
-        value: /var/data
       - key: MAKE_WEBHOOK_URL
         sync: false
       - key: MAKE_INGEST_SECRET
