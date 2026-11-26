@@ -28,6 +28,8 @@ Joe stores only messages it observes while the service is running in a local, ig
 
 Set `ADMIN_WHATSAPP_JID` in `.env` to make `daily brief` and `add reminders` available only to the Joe team; customers cannot access those internal conversation summaries.
 
+If WhatsApp temporarily rejects QR linking, set `PAIRING_PHONE_NUMBER` to the owner's number in international digits-only format (for example `9198XXXXXXXX`). Visit the protected `/qr` page and choose **Link with phone number instead** in WhatsApp, then enter Joe's displayed pairing code.
+
 ## Meeting reminders
 
 For a confirmed meeting that has attendee emails, Joe stores local WhatsApp reminders for the requester at **one hour** and **ten minutes** before the meeting. The prototype must remain running for the scheduler to deliver them; production should use a durable queue and hosted worker.

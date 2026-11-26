@@ -20,9 +20,12 @@ const timezone = process.env.TIMEZONE || 'Asia/Kolkata';
 const adminJid = process.env.ADMIN_WHATSAPP_JID || '';
 const mainUserEmail = process.env.MAIN_USER_EMAIL?.trim().toLowerCase() || '';
 const dashboardToken = process.env.DASHBOARD_TOKEN || '';
+const pairingPhoneNumber = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/g, '');
 const pendingEvents = new Map();
 const pendingDrafts = new Map();
 let qrDataUrl = null;
+let pairingCode = null;
+let pairingCodeRequested = false;
 const messageLog = [];
 const scheduledReminders = [];
 const persistentDataDirectory = process.env.PERSISTENT_DATA_DIR
@@ -465,8 +468,22 @@ async function startWhatsApp() {
       qrcode.generate(qr, { small: true });
       QRCode.toDataURL(qr, { margin: 2, width: 360 }).then((dataUrl) => { qrDataUrl = dataUrl; });
     }
+    if (pairingPhoneNumber && !state.creds.registered && !pairingCodeRequested) {
+      pairingCodeRequested = true;
+      setTimeout(async () => {
+        try {
+          pairingCode = await sock.requestPairingCode(pairingPhoneNumber);
+          qrDataUrl = null;
+          console.log('A WhatsApp pairing code is ready at the protected /qr page.');
+        } catch (error) {
+          pairingCodeRequested = false;
+          console.error('Could not request WhatsApp pairing code:', error.message);
+        }
+      }, 1_500);
+    }
     if (connection === 'open') {
       qrDataUrl = null;
+      pairingCode = null;
       console.log('Joe is connected to WhatsApp.');
     }
     if (connection === 'close') {
@@ -512,10 +529,12 @@ http.createServer(async (request, response) => {
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    const body = qrDataUrl
+    const body = pairingCode
+      ? `<main><h1>Link Joe with a phone number</h1><p>In WhatsApp, select <strong>Linked devices → Link a device → Link with phone number instead</strong>, then enter:</p><p class="code">${pairingCode}</p><p>This code expires quickly. Refresh this page if needed.</p></main>`
+      : qrDataUrl
       ? `<main><h1>Link Joe to WhatsApp</h1><img src="${qrDataUrl}" alt="WhatsApp linking QR"><p>WhatsApp → Settings → Linked devices → Link a device.</p><p>Refresh if the QR expires.</p></main>`
       : '<main><h1>Joe is connected to WhatsApp ✓</h1><p>You can close this page.</p></main>';
-    response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:18px system-ui;background:#f4f7fb;margin:0;display:grid;place-items:center;min-height:100vh}main{background:white;padding:32px;border-radius:20px;text-align:center;box-shadow:0 10px 30px #0002}img{max-width:100%}p{color:#526273}</style>${body}`);
+    response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:18px system-ui;background:#f4f7fb;margin:0;display:grid;place-items:center;min-height:100vh}main{background:white;padding:32px;border-radius:20px;text-align:center;box-shadow:0 10px 30px #0002;max-width:520px}img{max-width:100%}p{color:#526273}.code{font:700 34px ui-monospace,monospace;letter-spacing:.08em;color:#18243a}</style>${body}`);
     return;
   }
   if (request.url?.startsWith('/daily-brief')) {
