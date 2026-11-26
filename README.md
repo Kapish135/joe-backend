@@ -30,6 +30,29 @@ Set `ADMIN_WHATSAPP_JID` in `.env` to make `daily brief` and `add reminders` ava
 
 If WhatsApp temporarily rejects QR linking, set `PAIRING_PHONE_NUMBER` to the owner's number in international digits-only format (for example `9198XXXXXXXX`). Visit the protected `/qr` page and choose **Link with phone number instead** in WhatsApp, then enter Joe's displayed pairing code.
 
+## Product thought process and future scope
+
+Joe is built around a business-user insight: scheduling begins inside a conversation, but the calendar is where work is finally recorded. The product uses WhatsApp as the natural-language entry point and Google Calendar as the trusted system of record. Joe never silently changes a calendar: every external action is previewed and requires explicit confirmation.
+
+### What the prototype demonstrates today
+
+- WhatsApp-first meeting requests with natural-language understanding.
+- One-time customer onboarding for name and work email; Joe reuses the saved email on later invitations.
+- Meeting-topic capture is implemented locally for the next release; it asks for a meaningful title when a request is too vague.
+- Explicit preview and confirmation before Make creates the Google Calendar event and invitations.
+- WhatsApp reminders for confirmed meetings, plus an internal daily brief that surfaces unreplied conversations.
+
+### Next product milestones
+
+1. **Availability and slot intelligence** — Read free/busy time and offer the best two or three options based on working hours, focus blocks, timezone, buffers, and meeting-length preferences.
+2. **Full meeting lifecycle** — Let users reschedule, cancel, add guests, or change a title from WhatsApp. Each action would show a diff and require confirmation before Calendar is updated.
+3. **Meeting quality** — Turn the supplied topic into a concise agenda, add it to the event description, and automatically create a Google Meet link when appropriate.
+4. **Proactive assistant** — Send a morning brief, flag calendar conflicts, identify conversations with no response, and propose follow-up blocks rather than waiting for the user to notice.
+5. **Team coordination** — Find overlap across multiple attendees, respect different timezones, and negotiate alternatives through a scheduling link or controlled WhatsApp follow-ups.
+6. **Production architecture** — Replace the Baileys demonstration connector with the official WhatsApp Cloud API, store profiles and sessions in a database, use a durable queue for reminders, and add consent, audit logs, and role-based administration.
+
+The key design principle is progressive trust: Joe can be proactive in finding options and identifying risks, but it remains user-controlled whenever an external calendar change or outbound invitation is involved.
+
 ## Meeting reminders
 
 For a confirmed meeting that has attendee emails, Joe stores local WhatsApp reminders for the requester at **one hour** and **ten minutes** before the meeting. The prototype must remain running for the scheduler to deliver them; production should use a durable queue and hosted worker.

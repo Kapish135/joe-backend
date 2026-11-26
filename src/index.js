@@ -24,6 +24,7 @@ const pairingPhoneNumber = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/
 const pairingMode = Boolean(pairingPhoneNumber);
 const pendingEvents = new Map();
 const pendingDrafts = new Map();
+const pendingTopics = new Map();
 const pendingProfiles = new Map();
 const userProfiles = new Map();
 let qrDataUrl = null;
@@ -286,6 +287,16 @@ function withRequester(event, profile) {
   return { ...event, attendees };
 }
 
+function needsMeetingTopic(event) {
+  const title = event.meeting_title.trim().toLowerCase();
+  return !title || title === 'meeting' || /^call with\s/.test(title) || /^meeting with\s/.test(title);
+}
+
+async function askForTopic(sock, jid, event) {
+  pendingTopics.set(jid, event);
+  await sock.sendMessage(jid, { text: 'What is this meeting about? For example: *Product demo*, *Project kickoff*, or *Customer discovery call*.' });
+}
+
 function normalizeAttendeeEmails(attendees) {
   if (!Array.isArray(attendees)) return [];
   return [...new Set(attendees.flatMap((attendee) => {
@@ -407,6 +418,23 @@ async function handleIncoming(sock, message) {
     return;
   }
 
+  const topicEvent = pendingTopics.get(jid);
+  if (topicEvent) {
+    if (['cancel', 'stop'].includes(normalized)) {
+      pendingTopics.delete(jid);
+      await sock.sendMessage(jid, { text: 'Cancelled — I did not change your calendar.' });
+      return;
+    }
+    const meetingTitle = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (meetingTitle.length < 3 || attendeeEmails(meetingTitle).length) {
+      await sock.sendMessage(jid, { text: 'Please send a short meeting topic, for example: *Product demo* or *Project kickoff*.' });
+      return;
+    }
+    pendingTopics.delete(jid);
+    await askForConfirmation(sock, jid, { ...topicEvent, meeting_title: meetingTitle });
+    return;
+  }
+
   if (['confirm', 'yes', 'y', 'okay', 'ok', 'go ahead'].includes(normalized)) {
     const pending = pendingEvents.get(jid);
     if (!pending) {
@@ -433,6 +461,7 @@ async function handleIncoming(sock, message) {
   if (['cancel', 'no', 'stop'].includes(normalized)) {
     pendingEvents.delete(jid);
     pendingDrafts.delete(jid);
+    pendingTopics.delete(jid);
     await sock.sendMessage(jid, { text: 'Cancelled — I did not change your calendar.' });
     return;
   }
@@ -496,7 +525,12 @@ async function handleIncoming(sock, message) {
     }
     pendingDrafts.delete(jid);
     draft.attendees = emails;
-    await askForConfirmation(sock, jid, withRequester(draft, userProfiles.get(jid)));
+    const eventWithRequester = withRequester(draft, userProfiles.get(jid));
+    if (needsMeetingTopic(eventWithRequester)) {
+      await askForTopic(sock, jid, eventWithRequester);
+      return;
+    }
+    await askForConfirmation(sock, jid, eventWithRequester);
     return;
   }
 
@@ -519,7 +553,12 @@ async function handleIncoming(sock, message) {
     return;
   }
 
-  await askForConfirmation(sock, jid, withRequester(event, profile));
+  const eventWithRequester = withRequester(event, profile);
+  if (needsMeetingTopic(eventWithRequester)) {
+    await askForTopic(sock, jid, eventWithRequester);
+    return;
+  }
+  await askForConfirmation(sock, jid, eventWithRequester);
 }
 
 async function startWhatsApp() {
