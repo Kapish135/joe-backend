@@ -2,7 +2,6 @@ import 'dotenv/config';
 import OpenAI from 'openai';
 import makeWASocket, {
   DisconnectReason,
-  Browsers,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState
@@ -460,7 +459,9 @@ async function startWhatsApp() {
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
     logger,
     printQRInTerminal: false,
-    browser: Browsers.ubuntu('Joe Calendar Assistant')
+    browser: ['Joe Calendar Assistant', 'Chrome', '1.0.0'],
+    markOnlineOnConnect: false,
+    syncFullHistory: false
   });
   whatsappSocket = sock;
 
