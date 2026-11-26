@@ -1,6 +1,6 @@
 # Joe WhatsApp → Make → Google Calendar
 
-This local Node service links the Joe WhatsApp number through Baileys. A customer describes a meeting, Joe collects the attendee email if needed, waits for explicit `confirm`, then POSTs the event to the Make webhook. Make owns the central Google Calendar connection and sends invitations from the service organizer account. Customers do not need Google OAuth or a WhatsApp QR.
+This local Node service links the Joe WhatsApp number through Baileys. On a customer's first conversation, Joe collects their name and work email once, then automatically includes that email on future meeting invitations. Joe waits for explicit `confirm`, then POSTs the event to the Make webhook. Make owns the central Google Calendar connection and sends invitations from the service organizer account. Customers do not need Google OAuth or a WhatsApp QR.
 
 If `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, and `AZURE_OPENAI_DEPLOYMENT_NAME` are present in `.env`, Joe uses the Azure OpenAI Responses API to understand natural-language requests. The deployment must be the Azure deployment name. Standard `OPENAI_API_KEY` is also supported as a fallback. Without either provider, the local parser still handles the documented scheduling format.
 
@@ -45,13 +45,14 @@ The webhook receives:
 ```json
 {
   "meeting_title": "Customer call",
-  "attendees": ["alex@example.com"],
+  "attendees": [{ "email": "alex@example.com" }],
+  "attendee_emails": ["alex@example.com"],
   "start_time": "2026-11-27T15:00:00+05:30",
   "end_time": "2026-11-27T15:30:00+05:30"
 }
 ```
 
-In Make map the four properties to the Google Calendar **Create an Event** module. Set the Make scenario to **On** after testing with **Run once**.
+In Make map the four properties to the Google Calendar **Create an Event** module. Map `attendees[]` directly to its **Attendees** collection. Set the Make scenario to **On** after testing with **Run once**.
 
 `auth_info/` is the local WhatsApp session and `.env` contains the Make webhook secret. Both are ignored by git. Baileys is an unofficial WhatsApp Web client; use this personal-demo setup only and do not use it for unsolicited messaging.
 

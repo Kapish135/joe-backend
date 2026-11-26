@@ -24,6 +24,8 @@ const pairingPhoneNumber = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/
 const pairingMode = Boolean(pairingPhoneNumber);
 const pendingEvents = new Map();
 const pendingDrafts = new Map();
+const pendingProfiles = new Map();
+const userProfiles = new Map();
 let qrDataUrl = null;
 let pairingCode = null;
 let pairingCodeRequested = false;
@@ -36,6 +38,7 @@ const dataDirectory = path.join(persistentDataDirectory, 'data');
 const authDirectory = path.join(persistentDataDirectory, 'auth_info');
 const messagesPath = path.join(dataDirectory, 'messages.jsonl');
 const remindersPath = path.join(dataDirectory, 'scheduled-reminders.json');
+const profilesPath = path.join(dataDirectory, 'user-profiles.json');
 let whatsappSocket = null;
 const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT?.replace(/\/+$/, '');
 const usesAzure = Boolean(process.env.AZURE_OPENAI_API_KEY && azureEndpoint);
@@ -83,6 +86,22 @@ async function loadScheduledReminders() {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+}
+
+async function loadUserProfiles() {
+  try {
+    const saved = JSON.parse(await readFile(profilesPath, 'utf8'));
+    if (!Array.isArray(saved)) return;
+    for (const profile of saved) {
+      if (profile?.jid && profile?.email) userProfiles.set(profile.jid, profile);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+async function saveUserProfiles() {
+  await writeFile(profilesPath, JSON.stringify([...userProfiles.values()], null, 2));
 }
 
 async function saveScheduledReminders() {
@@ -262,6 +281,11 @@ function attendeeEmails(text) {
   return [...text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)].map(([email]) => email.toLowerCase());
 }
 
+function withRequester(event, profile) {
+  const attendees = [...new Set([...event.attendees, profile?.email].filter(Boolean).map((email) => email.toLowerCase()))];
+  return { ...event, attendees };
+}
+
 function normalizeAttendeeEmails(attendees) {
   if (!Array.isArray(attendees)) return [];
   return [...new Set(attendees.flatMap((attendee) => {
@@ -350,6 +374,38 @@ async function handleIncoming(sock, message) {
   const text = replyText(message).trim();
   if (!text) return;
   const normalized = text.toLowerCase().replace(/[!.]/g, '').trim();
+  const profileSetup = pendingProfiles.get(jid);
+
+  if (profileSetup && ['cancel', 'stop'].includes(normalized)) {
+    pendingProfiles.delete(jid);
+    await sock.sendMessage(jid, { text: 'No problem — profile setup is cancelled. Send *hi* whenever you want to start.' });
+    return;
+  }
+
+  if (profileSetup?.step === 'name') {
+    const name = text.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (name.length < 2 || attendeeEmails(name).length) {
+      await sock.sendMessage(jid, { text: 'Please share your name first, for example: *Kapish Chawla*.' });
+      return;
+    }
+    pendingProfiles.set(jid, { step: 'email', name });
+    await sock.sendMessage(jid, { text: `Nice to meet you, ${name}. What is your work email? I’ll use it as your default invite email.` });
+    return;
+  }
+
+  if (profileSetup?.step === 'email') {
+    const [email] = attendeeEmails(text);
+    if (!email) {
+      await sock.sendMessage(jid, { text: 'Please send a valid work email, for example: *you@company.com*.' });
+      return;
+    }
+    const profile = { jid, name: profileSetup.name, email, createdAt: new Date().toISOString() };
+    userProfiles.set(jid, profile);
+    pendingProfiles.delete(jid);
+    await saveUserProfiles();
+    await sock.sendMessage(jid, { text: `You’re all set, ${profile.name} ✓ I’ll automatically include *${profile.email}* on your meeting invitations.\n\nNow tell me who you want to meet, their email, and a time. For example: “Set up a customer call with alex@example.com tomorrow at 3 PM for 30 minutes.”` });
+    return;
+  }
 
   if (['confirm', 'yes', 'y', 'okay', 'ok', 'go ahead'].includes(normalized)) {
     const pending = pendingEvents.get(jid);
@@ -382,8 +438,14 @@ async function handleIncoming(sock, message) {
   }
 
   if (/^(hi|hello|hey|hii+|good morning|good afternoon|good evening|start)[!,. ]*$/i.test(normalized)) {
+    const profile = userProfiles.get(jid);
+    if (!profile) {
+      pendingProfiles.set(jid, { step: 'name' });
+      await sock.sendMessage(jid, { text: 'Hi, I’m *Joe* — your meeting coordinator. Before we schedule your first meeting, what should I call you?' });
+      return;
+    }
     await sock.sendMessage(jid, {
-      text: 'Hi, I’m *Joe* — your meeting coordinator. Tell me who you want to meet, their email, and a time. I’ll prepare the invite, ask for confirmation, then send it from the Joe Scheduling Calendar.\n\nTry: “Set up a customer call with alex@example.com tomorrow at 3 PM for 30 minutes.”\n\nYou never need to connect your Google Calendar to get started.'
+      text: `Welcome back, ${profile.name}. Tell me who you want to meet, their email, and a time. I’ll automatically include *${profile.email}* on the invite, then ask for confirmation.\n\nTry: “Set up a customer call with alex@example.com tomorrow at 3 PM for 30 minutes.”`
     });
     return;
   }
@@ -434,7 +496,14 @@ async function handleIncoming(sock, message) {
     }
     pendingDrafts.delete(jid);
     draft.attendees = emails;
-    await askForConfirmation(sock, jid, draft);
+    await askForConfirmation(sock, jid, withRequester(draft, userProfiles.get(jid)));
+    return;
+  }
+
+  const profile = userProfiles.get(jid);
+  if (!profile) {
+    pendingProfiles.set(jid, { step: 'name' });
+    await sock.sendMessage(jid, { text: 'Before I schedule meetings, I need your basic profile once. What should I call you?' });
     return;
   }
 
@@ -445,17 +514,18 @@ async function handleIncoming(sock, message) {
   }
 
   if (!event.attendees.length) {
-    pendingDrafts.set(jid, event);
+    pendingDrafts.set(jid, withRequester(event, profile));
     await sock.sendMessage(jid, { text: `I can arrange “${event.meeting_title}” for ${formatForUser(event.start_time)}. Who should I invite? Send their email address, or reply *cancel*.` });
     return;
   }
 
-  await askForConfirmation(sock, jid, event);
+  await askForConfirmation(sock, jid, withRequester(event, profile));
 }
 
 async function startWhatsApp() {
   await loadMessageLog();
   await loadScheduledReminders();
+  await loadUserProfiles();
   await mkdir(authDirectory, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(authDirectory);
   const { version } = await fetchLatestBaileysVersion();
