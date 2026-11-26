@@ -38,7 +38,8 @@ Joe is built around a business-user insight: scheduling begins inside a conversa
 
 - WhatsApp-first meeting requests with natural-language understanding.
 - One-time customer onboarding for name and work email; Joe reuses the saved email on later invitations.
-- Meeting-topic capture is implemented locally for the next release; it asks for a meaningful title when a request is too vague.
+- Meeting-topic capture asks for a meaningful title when a request is too vague.
+- Per-chat rolling memory summaries that give Azure OpenAI context about the customer, active meeting details, and unresolved questions. A customer can send `forget my memory` to erase their local profile and chat memory.
 - Explicit preview and confirmation before Make creates the Google Calendar event and invitations.
 - WhatsApp reminders for confirmed meetings, plus an internal daily brief that surfaces unreplied conversations.
 
@@ -52,6 +53,8 @@ Joe is built around a business-user insight: scheduling begins inside a conversa
 6. **Production architecture** — Replace the Baileys demonstration connector with the official WhatsApp Cloud API, store profiles and sessions in a database, use a durable queue for reminders, and add consent, audit logs, and role-based administration.
 
 The key design principle is progressive trust: Joe can be proactive in finding options and identifying risks, but it remains user-controlled whenever an external calendar change or outbound invitation is involved.
+
+> The no-cost Render deployment stores these summaries in its local filesystem, so they remain available while the instance is running but are reset after a sleep, restart, or redeploy. Connect a database through `DATABASE_URL` before relying on long-term customer memory.
 
 ## Meeting reminders
 
