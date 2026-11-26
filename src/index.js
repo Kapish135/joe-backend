@@ -2,6 +2,7 @@ import 'dotenv/config';
 import OpenAI from 'openai';
 import makeWASocket, {
   DisconnectReason,
+  Browsers,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState
@@ -21,6 +22,7 @@ const adminJid = process.env.ADMIN_WHATSAPP_JID || '';
 const mainUserEmail = process.env.MAIN_USER_EMAIL?.trim().toLowerCase() || '';
 const dashboardToken = process.env.DASHBOARD_TOKEN || '';
 const pairingPhoneNumber = (process.env.PAIRING_PHONE_NUMBER || '').replace(/\D/g, '');
+const pairingMode = Boolean(pairingPhoneNumber);
 const pendingEvents = new Map();
 const pendingDrafts = new Map();
 let qrDataUrl = null;
@@ -458,19 +460,15 @@ async function startWhatsApp() {
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
     logger,
     printQRInTerminal: false,
-    browser: ['Joe Calendar Assistant', 'Chrome', '1.0.0']
+    browser: Browsers.ubuntu('Joe Calendar Assistant')
   });
   whatsappSocket = sock;
 
   sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      qrcode.generate(qr, { small: true });
-      QRCode.toDataURL(qr, { margin: 2, width: 360 }).then((dataUrl) => { qrDataUrl = dataUrl; });
-    }
-    if (pairingPhoneNumber && !state.creds.registered && !pairingCodeRequested) {
-      pairingCodeRequested = true;
-      setTimeout(async () => {
+      if (pairingMode && !sock.authState.creds.registered && !pairingCodeRequested) {
+        pairingCodeRequested = true;
         try {
           pairingCode = await sock.requestPairingCode(pairingPhoneNumber);
           qrDataUrl = null;
@@ -479,7 +477,10 @@ async function startWhatsApp() {
           pairingCodeRequested = false;
           console.error('Could not request WhatsApp pairing code:', error.message);
         }
-      }, 1_500);
+      } else if (!pairingMode) {
+        qrcode.generate(qr, { small: true });
+        QRCode.toDataURL(qr, { margin: 2, width: 360 }).then((dataUrl) => { qrDataUrl = dataUrl; });
+      }
     }
     if (connection === 'open') {
       qrDataUrl = null;
@@ -488,7 +489,10 @@ async function startWhatsApp() {
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) startWhatsApp();
+      console.error(`WhatsApp connection closed (${code || 'unknown'}):`, lastDisconnect?.error?.message || 'no message');
+      pairingCode = null;
+      pairingCodeRequested = false;
+      if (code !== DisconnectReason.loggedOut) setTimeout(() => startWhatsApp(), 2_000);
       else console.log('WhatsApp logged out. Delete auth_info and restart to link again.');
     }
   });
