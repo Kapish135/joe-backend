@@ -9,6 +9,16 @@ services:
         value: "10000"
       - key: TIMEZONE
         value: Asia/Kolkata
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "false"
+      - key: JOE_WORKSPACE_ID
+        value: b7abfc76-5f38-4b28-a5fa-2db9b5c282ef
+      - key: JOE_WORKSPACE_SLUG
+        value: joe-demo
+      - key: JOE_WORKSPACE_NAME
+        value: Joe Demo
       - key: MAKE_WEBHOOK_URL
         sync: false
       - key: ADMIN_WHATSAPP_JID

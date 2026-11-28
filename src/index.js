@@ -12,6 +12,7 @@ import qrcode from 'qrcode-terminal';
 import http from 'node:http';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { JoeDatabase } from './database.js';
 
 const logger = pino({ level: 'silent' });
 const port = Number(process.env.PORT || 3030);
@@ -28,6 +29,7 @@ const pendingTopics = new Map();
 const pendingProfiles = new Map();
 const userProfiles = new Map();
 const conversationMemories = new Map();
+const database = new JoeDatabase();
 let qrDataUrl = null;
 let pairingCode = null;
 let pairingCodeRequested = false;
@@ -92,6 +94,11 @@ async function loadScheduledReminders() {
 }
 
 async function loadUserProfiles() {
+  if (database.enabled) {
+    const saved = await database.loadProfiles();
+    for (const profile of saved) userProfiles.set(profile.jid, profile);
+    return;
+  }
   try {
     const saved = JSON.parse(await readFile(profilesPath, 'utf8'));
     if (!Array.isArray(saved)) return;
@@ -104,10 +111,19 @@ async function loadUserProfiles() {
 }
 
 async function saveUserProfiles() {
+  if (database.enabled) {
+    await Promise.all([...userProfiles.values()].map((profile) => database.saveProfile(profile)));
+    return;
+  }
   await writeFile(profilesPath, JSON.stringify([...userProfiles.values()], null, 2));
 }
 
 async function loadConversationMemories() {
+  if (database.enabled) {
+    const saved = await database.loadMemories();
+    for (const memory of saved) conversationMemories.set(memory.jid, memory);
+    return;
+  }
   try {
     const saved = JSON.parse(await readFile(memoriesPath, 'utf8'));
     if (!Array.isArray(saved)) return;
@@ -120,6 +136,10 @@ async function loadConversationMemories() {
 }
 
 async function saveConversationMemories() {
+  if (database.enabled) {
+    await Promise.all([...conversationMemories.values()].map((memory) => database.saveMemory(memory)));
+    return;
+  }
   await writeFile(memoriesPath, JSON.stringify([...conversationMemories.values()], null, 2));
 }
 
@@ -170,6 +190,10 @@ async function sendDueReminders() {
 async function logMessage(record) {
   messageLog.push(record);
   if (messageLog.length > 1000) messageLog.shift();
+  if (database.enabled) {
+    await database.recordMessage(record);
+    return;
+  }
   await appendFile(messagesPath, `${JSON.stringify(record)}\n`);
 }
 
@@ -336,6 +360,8 @@ function isDashboardAuthorized(request) {
 
 async function askForConfirmation(sock, jid, event) {
   pendingEvents.set(jid, event);
+  await database.setLifecycleStage(jid, 'qualified');
+  await database.saveMeetingDraft(jid, event);
   await sock.sendMessage(jid, {
     text: `Here’s the meeting I’ll arrange:\n\n• *${event.meeting_title}*\n• ${formatForUser(event.start_time)} (${event.duration} minutes)\n• Invite: ${event.attendees.join(', ')}\n\nReply *confirm* and Joe will create it from the Joe Scheduling Calendar and send the invitations. Reply *cancel* to make no changes.`
   });
@@ -462,6 +488,8 @@ async function handleIncoming(sock, message) {
     pendingProfiles.delete(jid);
     userProfiles.delete(jid);
     conversationMemories.delete(jid);
+    await database.forgetContact(jid);
+    await database.forgetContact(jid);
     await Promise.all([saveUserProfiles(), saveConversationMemories()]);
     await sock.sendMessage(jid, { text: 'Done — I deleted the profile and conversation memory I stored for this chat. Send *hi* whenever you want to start again.' });
     return;
@@ -504,6 +532,7 @@ async function handleIncoming(sock, message) {
   if (topicEvent) {
     if (['cancel', 'stop'].includes(normalized)) {
       pendingTopics.delete(jid);
+      await database.cancelActiveDrafts(jid);
       await sock.sendMessage(jid, { text: 'Cancelled — I did not change your calendar.' });
       return;
     }
@@ -528,6 +557,8 @@ async function handleIncoming(sock, message) {
     try {
       for (const event of events) await createInCalendar(event);
       pendingEvents.delete(jid);
+      await database.setLifecycleStage(jid, 'meeting_booked');
+      for (const event of events) await database.saveCalendarEvent(jid, event);
       for (const event of events) await queueMeetingReminders(jid, event);
       const result = events.length === 1
         ? `Confirmed ✓ “${events[0].meeting_title}” is scheduled for ${formatForUser(events[0].start_time)}. Invitations were sent from the Joe Scheduling Calendar.`
@@ -544,6 +575,7 @@ async function handleIncoming(sock, message) {
     pendingEvents.delete(jid);
     pendingDrafts.delete(jid);
     pendingTopics.delete(jid);
+    await database.cancelActiveDrafts(jid);
     await sock.sendMessage(jid, { text: 'Cancelled — I did not change your calendar.' });
     return;
   }
@@ -649,6 +681,12 @@ async function handleIncoming(sock, message) {
 }
 
 async function startWhatsApp() {
+  if (database.enabled) {
+    await database.initialize();
+    console.log(`Joe database connected: workspace ${database.workspaceSlug}`);
+  } else {
+    console.log('Joe database is not configured; using local demo storage.');
+  }
   await loadMessageLog();
   await loadScheduledReminders();
   await loadUserProfiles();

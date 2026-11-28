@@ -53,6 +53,7 @@ Copy `.env.example` to `.env` and set the following values:
 | `ADMIN_WHATSAPP_JID` | WhatsApp JID of the Joe account owner. |
 | `DASHBOARD_TOKEN` | Protects the QR-linking page in deployed environments. |
 | `TIMEZONE` | Default scheduling timezone, such as `Asia/Kolkata`. |
+| `DATABASE_URL` | PostgreSQL connection for the isolated `joe` schema in `svt-ppf-db`. |
 
 ## Make.com payload
 
@@ -74,7 +75,7 @@ In Make, map `meeting_title`, `start_time`, and `end_time` to **Google Calendar 
 
 - This is a case-study prototype using Baileys, an unofficial WhatsApp Web connector.
 - The free Render deployment does not persist the WhatsApp session after a restart or redeploy, so Joe may need to be linked again.
-- Local profile and conversation context are session-level in the demo; a database is required for durable customer memory.
+- With `DATABASE_URL` configured, profiles, conversation summaries, messages, meeting drafts, events, and reminders are stored in the isolated `joe` schema. No existing `public` table is modified.
 - For a production rollout, replace Baileys with the official WhatsApp Cloud API and add durable storage, job processing, consent controls, and audit logs.
 
 ## Future direction
