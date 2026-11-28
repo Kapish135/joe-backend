@@ -583,8 +583,8 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     }
     pendingSalesLeads.set(jid, { step: 'email', name: null, assessment, proposedEvent });
     const nextStep = proposedEvent
-      ? 'Great — I can arrange a 10-minute demo. What work email should receive the invitation?'
-      : 'Great — I can arrange a 10-minute demo. Please send your *work email* and a *preferred day and time*. For example: “me@company.com, tomorrow at 3 PM.”';
+      ? 'Great — I can arrange a 10-minute demo. Please send your *business type* and the *work email* that should receive the invitation.'
+      : 'Great — I can arrange a 10-minute demo. Please send your *business type*, *work email*, and a *preferred day and time*. For example: “Dental clinic, me@company.com, tomorrow at 3 PM.”';
     await sock.sendMessage(jid, { text: nextStep });
     return true;
   }
