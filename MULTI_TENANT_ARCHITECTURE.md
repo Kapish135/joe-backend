@@ -2,13 +2,13 @@
 
 ## Product model
 
-Joe is installed behind **each organization’s own WhatsApp Business number**. Customers continue to message the business they recognize; Joe qualifies the request, keeps context for that organization, and converts qualified conversations into confirmed meetings.
+Joe uses **one shared Joe WhatsApp number** for multiple organizations. Each business shares its own entry QR or WhatsApp deep link, which identifies the workspace before Joe stores or processes a lead.
 
 ```text
-Customer → Company WhatsApp number → Joe workspace → Company Make workflow → Company calendar
+Customer → Business-specific Joe entry link → Shared Joe number → Joe workspace → Business Make workflow → Business calendar
 ```
 
-Joe is not intended to use one shared public number for every firm, except as a demo or concierge offering.
+This model removes the need to connect, authenticate, and maintain a separate WhatsApp number for every firm during the MVP.
 
 ## Tenant isolation
 
@@ -26,13 +26,13 @@ Secrets such as Cloud API tokens, Make webhooks, and calendar credentials belong
 
 ## Persistent storage requirement
 
-For the current Baileys prototype, persistent storage is required to keep the linked-device session after an application restart. Without it, the number must be linked again with a QR code.
+For the current Baileys prototype, persistent storage is required to keep the **single shared Joe** linked-device session after an application restart. Without it, that number must be linked again with a QR code.
 
-Use durable PostgreSQL for customer and lead data in every environment. If Baileys remains temporarily in use, attach a persistent disk only for per-workspace `auth_info` session data. Do not share one authentication directory across organizations.
+Use durable PostgreSQL for customer and lead data in every environment. If Baileys remains temporarily in use, attach one persistent disk for Joe's shared `auth_info` session data. Workspace data remains isolated in PostgreSQL, not in the session directory.
 
 ## Recommended production architecture
 
-Use the official WhatsApp Cloud API for multi-organization production. It avoids QR linking and persistent WhatsApp Web sessions.
+Use the official WhatsApp Cloud API for production scale. It avoids QR linking and persistent WhatsApp Web sessions, while still allowing a shared Joe entry point or a later upgrade to dedicated customer numbers.
 
 ```text
 Official WhatsApp Cloud API webhooks
@@ -44,11 +44,12 @@ PostgreSQL (joe schema) + durable job queue
 Per-workspace Make / Calendar integration
 ```
 
-The workspace router resolves the inbound business phone-number ID to a workspace before handling the message. That ID then scopes every database read and write.
+The workspace router resolves an organization from its dedicated entry link or onboarding code before handling the first message. It stores that workspace ID against the contact and scopes every later database read and write to it.
 
 ## Rollout path
 
 1. Keep the current linked Joe number as the case-demo experience.
 2. Set `DATABASE_URL` on the Joe service to enable durable workspace data.
-3. Purchase a persistent disk only if continuing with Baileys for the demo.
-4. For customer handover, onboard each firm’s own WhatsApp Business number through Cloud API and create one workspace plus integration configuration per firm.
+3. Purchase a persistent disk for the single Baileys-based Joe number.
+4. Create one workspace, Make/calendar configuration, and unique entry QR/deep link per firm.
+5. For production scale, replace Baileys with Cloud API while retaining the workspace routing model.
