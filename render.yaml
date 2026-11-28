@@ -23,6 +23,10 @@ services:
         sync: false
       - key: REQUIRE_WORKSPACE_CODE
         value: "true"
+      - key: JOE_SALES_MODE
+        value: "true"
+      - key: JOE_SALES_CALENDAR_EMAIL
+        sync: false
       - key: MAKE_WEBHOOK_URL
         sync: false
       - key: ADMIN_WHATSAPP_JID

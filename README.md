@@ -21,6 +21,7 @@ Users do not need Google OAuth or their own WhatsApp QR. The single Joe WhatsApp
 - Per-chat profile and short rolling context while the service is running.
 - Explicit confirmation before any event creation.
 - Make.com webhook integration for Google Calendar event creation.
+- A public Joe sales flow: Azure OpenAI answers product questions, qualifies genuine business enquiries, and offers a demo only when a prospect explicitly asks to book one.
 
 ## Run locally
 
@@ -55,6 +56,12 @@ Copy `.env.example` to `.env` and set the following values:
 | `TIMEZONE` | Default scheduling timezone, such as `Asia/Kolkata`. |
 | `DATABASE_URL` | PostgreSQL connection for the isolated `joe` schema in `svt-ppf-db`. |
 | `REQUIRE_WORKSPACE_CODE` | When `true`, a new lead must use a business entry code such as `JOIN acme`. |
+| `JOE_SALES_MODE` | Allows the shared Joe number to answer public product enquiries that do not arrive through a business workspace link. |
+| `JOE_SALES_CALENDAR_EMAIL` | Internal email included on Joe product-demo invitations; falls back to `MAIN_USER_EMAIL`. |
+
+## Public Joe demo flow
+
+When `JOE_SALES_MODE=true`, a visitor who messages the public Joe number can ask what the product does. Azure OpenAI answers only from Joe's supported capabilities, records a qualified business need, and asks for a work email and a time only when the visitor explicitly requests a demo. Joe still shows the calendar preview and requires `confirm` before it sends anything to Make.com.
 
 ## Make.com payload
 

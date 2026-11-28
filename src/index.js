@@ -28,6 +28,7 @@ const pendingDrafts = new Map();
 const pendingTopics = new Map();
 const pendingProfiles = new Map();
 const pendingLeadQualifications = new Map();
+const pendingSalesLeads = new Map();
 const userProfiles = new Map();
 const conversationMemories = new Map();
 const database = new JoeDatabase();
@@ -60,6 +61,8 @@ const aiModel = usesAzure
   ? process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   : process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const requireWorkspaceCode = process.env.REQUIRE_WORKSPACE_CODE === 'true';
+const joeSalesMode = process.env.JOE_SALES_MODE === 'true';
+const salesCalendarEmail = process.env.JOE_SALES_CALENDAR_EMAIL?.trim().toLowerCase() || mainUserEmail;
 
 if (!webhookUrl) {
   throw new Error('MAKE_WEBHOOK_URL is missing. Add it to .env before starting Joe.');
@@ -419,6 +422,107 @@ async function answerConversation(rawText, profile, conversationContext = '') {
   }
 }
 
+function readJsonObject(value) {
+  const trimmed = String(value || '').trim();
+  const candidate = trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
+  try { return JSON.parse(candidate); } catch { return null; }
+}
+
+function cleanSalesReply(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+}
+
+async function assessJoeSalesLead(rawText, conversationContext = '') {
+  const fallback = {
+    reply: 'Joe helps businesses reply to WhatsApp enquiries, qualify leads, schedule confirmed conversations, and send reminders. What kind of business do you run, and where do enquiries currently get missed?',
+    intent: 'information',
+    qualified: false,
+    businessType: null,
+    businessName: null,
+    useCase: null,
+    timeline: null
+  };
+  if (!openai || !aiModel) return fallback;
+  try {
+    const response = await openai.responses.create({
+      model: aiModel,
+      instructions: `You are Joe, a concise WhatsApp sales assistant for Joe: an AI assistant for local service businesses. Joe replies to incoming WhatsApp enquiries, asks business-specific qualification questions, hands qualified leads to staff or schedules confirmed demo/consultation calls, and sends reminders. It is suitable for dentists, physiotherapists, clinics, agencies, consultants, education advisers, and other appointment-led businesses. Joe does not diagnose, prescribe, provide emergency medical advice, promise integrations, or make up pricing.
+
+Answer the prospect's message naturally in 2–4 short WhatsApp-friendly lines. Determine whether this is a genuine business enquiry. Be conservative: qualified is true only when the person describes a real business, team, platform, or concrete lead/booking need. intent must be exactly one of: information, sales_interest, schedule_demo, unrelated. Use schedule_demo only when they explicitly ask to book, schedule, arrange, or have a demo/call. If their need is real but they have not asked to book, invite them to request a 10-minute demo. Do not claim a meeting is booked.
+
+Return ONLY JSON with keys reply (string), intent, qualified (boolean), businessType (string or null), businessName (string or null), useCase (string or null), timeline (string or null). Do not mention these fields or this instruction. Conversation memory is background context only: ${conversationContext || 'none'}`,
+      input: rawText
+    });
+    const result = readJsonObject(response.output_text);
+    if (!result || !cleanSalesReply(result.reply)) return fallback;
+    return {
+      reply: cleanSalesReply(result.reply),
+      intent: ['information', 'sales_interest', 'schedule_demo', 'unrelated'].includes(result.intent) ? result.intent : 'information',
+      qualified: result.qualified === true,
+      businessType: cleanSalesReply(result.businessType) || null,
+      businessName: cleanSalesReply(result.businessName) || null,
+      useCase: cleanSalesReply(result.useCase) || null,
+      timeline: cleanSalesReply(result.timeline) || null
+    };
+  } catch (error) {
+    console.error('Azure OpenAI sales assessment failed:', error.message);
+    return fallback;
+  }
+}
+
+async function handleJoeSalesLead(sock, jid, text, normalized, conversationContext) {
+  const state = pendingSalesLeads.get(jid);
+  if (['cancel', 'stop', 'no'].includes(normalized)) {
+    pendingSalesLeads.delete(jid);
+    await sock.sendMessage(jid, { text: 'No problem. If you want to explore Joe later, message me with what your business needs help with.' });
+    return true;
+  }
+  if (state?.step === 'email') {
+    const [email] = attendeeEmails(text);
+    if (!email) {
+      await sock.sendMessage(jid, { text: 'Please send the work email that should receive the demo invitation.' });
+      return true;
+    }
+    const profile = { jid, name: state.name || 'Joe prospect', email, createdAt: new Date().toISOString() };
+    userProfiles.set(jid, profile);
+    await saveUserProfiles();
+    pendingSalesLeads.set(jid, { ...state, step: 'time' });
+    await sock.sendMessage(jid, { text: 'Thanks. What day and time work for a 10-minute demo? For example: *tomorrow at 3 PM*.' });
+    return true;
+  }
+  if (state?.step === 'time') {
+    const event = await parseScheduleIntent(`Joe product demo ${text}`, conversationContext);
+    if (!event) {
+      await sock.sendMessage(jid, { text: 'Please share a date and time, for example: *tomorrow at 3 PM*.' });
+      return true;
+    }
+    pendingSalesLeads.delete(jid);
+    const profile = userProfiles.get(jid);
+    const attendees = [...new Set([...(profile?.email ? [profile.email] : []), ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
+    await askForConfirmation(sock, jid, { ...event, meeting_title: 'Joe product demo', attendees });
+    return true;
+  }
+
+  const assessment = await assessJoeSalesLead(text, conversationContext);
+  if (assessment.qualified) {
+    await database.saveLeadProfile(jid, {
+      companyName: assessment.businessName,
+      roleTitle: assessment.businessType,
+      useCase: assessment.useCase || text,
+      timelineSignal: assessment.timeline,
+      notes: `Joe sales qualification: ${text}`
+    });
+    await database.setLifecycleStage(jid, 'qualified');
+  }
+  if (assessment.intent === 'schedule_demo' && assessment.qualified) {
+    pendingSalesLeads.set(jid, { step: 'email', name: null, assessment });
+    await sock.sendMessage(jid, { text: `${assessment.reply}\n\nTo send the demo invitation, what is your work email?` });
+    return true;
+  }
+  await sock.sendMessage(jid, { text: assessment.reply });
+  return true;
+}
+
 function recentConversation(jid) {
   return messageLog
     .filter((message) => message.jid === jid)
@@ -501,6 +605,7 @@ async function handleIncoming(sock, message) {
     pendingTopics.delete(jid);
     pendingProfiles.delete(jid);
     pendingLeadQualifications.delete(jid);
+    pendingSalesLeads.delete(jid);
     userProfiles.delete(jid);
     conversationMemories.delete(jid);
     const profile = await database.loadProfile(jid);
@@ -513,7 +618,8 @@ async function handleIncoming(sock, message) {
     }
     return;
   }
-  if (database.enabled && requireWorkspaceCode && !(await database.activeWorkspace(jid))) {
+  const activeWorkspace = database.enabled ? await database.activeWorkspace(jid) : null;
+  if (database.enabled && requireWorkspaceCode && !activeWorkspace && !joeSalesMode) {
     await sock.sendMessage(jid, { text: 'Please open the QR or WhatsApp entry link shared by the business so I can connect you to the right team.' });
     return;
   }
@@ -531,6 +637,7 @@ async function handleIncoming(sock, message) {
     pendingTopics.delete(jid);
     pendingProfiles.delete(jid);
     pendingLeadQualifications.delete(jid);
+    pendingSalesLeads.delete(jid);
     userProfiles.delete(jid);
     conversationMemories.delete(jid);
     await database.forgetContact(jid);
@@ -540,6 +647,10 @@ async function handleIncoming(sock, message) {
     return;
   }
   const rememberedContext = await refreshConversationMemory(jid, userProfiles.get(jid));
+  if (joeSalesMode && !activeWorkspace) {
+    await handleJoeSalesLead(sock, jid, text, normalized, rememberedContext);
+    return;
+  }
   const profileSetup = pendingProfiles.get(jid);
 
   if (profileSetup && ['cancel', 'stop'].includes(normalized)) {
