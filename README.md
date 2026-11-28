@@ -54,6 +54,7 @@ Copy `.env.example` to `.env` and set the following values:
 | `DASHBOARD_TOKEN` | Protects the QR-linking page in deployed environments. |
 | `TIMEZONE` | Default scheduling timezone, such as `Asia/Kolkata`. |
 | `DATABASE_URL` | PostgreSQL connection for the isolated `joe` schema in `svt-ppf-db`. |
+| `REQUIRE_WORKSPACE_CODE` | When `true`, a new lead must use a business entry code such as `JOIN acme`. |
 
 ## Make.com payload
 

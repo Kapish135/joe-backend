@@ -19,6 +19,10 @@ services:
         value: joe-demo
       - key: JOE_WORKSPACE_NAME
         value: Joe Demo
+      - key: JOE_WHATSAPP_NUMBER
+        sync: false
+      - key: REQUIRE_WORKSPACE_CODE
+        value: "true"
       - key: MAKE_WEBHOOK_URL
         sync: false
       - key: ADMIN_WHATSAPP_JID

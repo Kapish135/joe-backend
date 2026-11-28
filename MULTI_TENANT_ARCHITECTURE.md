@@ -14,6 +14,8 @@ This model removes the need to connect, authenticate, and maintain a separate Wh
 
 Each organization has one `joe.workspaces` record. Every lead, message, AI summary, draft, calendar event, and reminder carries that workspace ID. The new `joe` PostgreSQL schema is separate from all existing `public` tables.
 
+To onboard a business, provision a short workspace slug (for example `acme`) and give it a QR/deep link that pre-fills `JOIN acme`. Joe records that selection in `joe.workspace_sessions`; one WhatsApp contact can switch businesses only by using another business's entry link.
+
 | Domain | Storage |
 | --- | --- |
 | Organization settings | `joe.workspaces` |

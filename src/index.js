@@ -27,6 +27,7 @@ const pendingEvents = new Map();
 const pendingDrafts = new Map();
 const pendingTopics = new Map();
 const pendingProfiles = new Map();
+const pendingLeadQualifications = new Map();
 const userProfiles = new Map();
 const conversationMemories = new Map();
 const database = new JoeDatabase();
@@ -58,6 +59,7 @@ const openai = usesAzure
 const aiModel = usesAzure
   ? process.env.AZURE_OPENAI_DEPLOYMENT_NAME
   : process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const requireWorkspaceCode = process.env.REQUIRE_WORKSPACE_CODE === 'true';
 
 if (!webhookUrl) {
   throw new Error('MAKE_WEBHOOK_URL is missing. Add it to .env before starting Joe.');
@@ -448,7 +450,7 @@ async function refreshConversationMemory(jid, profile) {
   return memory.summary;
 }
 
-async function createInCalendar(event) {
+async function createInCalendar(event, workspace) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -464,7 +466,9 @@ async function createInCalendar(event) {
         attendees: event.attendees.map((email) => ({ email })),
         attendee_emails: event.attendees,
         start_time: event.start_time,
-        end_time: event.end_time
+        end_time: event.end_time,
+        workspace_id: workspace?.id || null,
+        workspace_slug: workspace?.slug || null
       }),
       signal: controller.signal
     });
@@ -481,11 +485,52 @@ async function handleIncoming(sock, message) {
   const text = replyText(message).trim();
   if (!text) return;
   const normalized = text.toLowerCase().replace(/[!.]/g, '').trim();
+  const workspaceJoin = normalized.match(/^(?:join|start)\s+([a-z0-9-]{3,64})$/i);
+  if (workspaceJoin) {
+    if (!database.enabled) {
+      await sock.sendMessage(jid, { text: 'Workspace onboarding is being configured. Please try again shortly.' });
+      return;
+    }
+    const workspace = await database.activateWorkspace(jid, workspaceJoin[1]);
+    if (!workspace) {
+      await sock.sendMessage(jid, { text: 'I could not find that business workspace. Please open the QR or WhatsApp link shared by the business.' });
+      return;
+    }
+    pendingEvents.delete(jid);
+    pendingDrafts.delete(jid);
+    pendingTopics.delete(jid);
+    pendingProfiles.delete(jid);
+    pendingLeadQualifications.delete(jid);
+    userProfiles.delete(jid);
+    conversationMemories.delete(jid);
+    const profile = await database.loadProfile(jid);
+    if (profile) {
+      userProfiles.set(jid, profile);
+      await sock.sendMessage(jid, { text: `You’re connected to *${workspace.name}*. Welcome back, ${profile.name}. Tell me how we can help, or ask to schedule a meeting.` });
+    } else {
+      pendingProfiles.set(jid, { step: 'name' });
+      await sock.sendMessage(jid, { text: `You’re connected to *${workspace.name}*. I’m Joe, the lead and meeting assistant. What should I call you?` });
+    }
+    return;
+  }
+  if (database.enabled && requireWorkspaceCode && !(await database.activeWorkspace(jid))) {
+    await sock.sendMessage(jid, { text: 'Please open the QR or WhatsApp entry link shared by the business so I can connect you to the right team.' });
+    return;
+  }
+  if (database.enabled && !userProfiles.has(jid)) {
+    const storedProfile = await database.loadProfile(jid);
+    if (storedProfile) userProfiles.set(jid, storedProfile);
+  }
+  if (database.enabled && !conversationMemories.has(jid)) {
+    const storedMemory = await database.loadMemory(jid);
+    if (storedMemory) conversationMemories.set(jid, storedMemory);
+  }
   if (/^forget( my)? (memory|data|profile)$/.test(normalized)) {
     pendingEvents.delete(jid);
     pendingDrafts.delete(jid);
     pendingTopics.delete(jid);
     pendingProfiles.delete(jid);
+    pendingLeadQualifications.delete(jid);
     userProfiles.delete(jid);
     conversationMemories.delete(jid);
     await database.forgetContact(jid);
@@ -524,7 +569,16 @@ async function handleIncoming(sock, message) {
     userProfiles.set(jid, profile);
     pendingProfiles.delete(jid);
     await saveUserProfiles();
-    await sock.sendMessage(jid, { text: `You’re all set, ${profile.name} ✓ I’ll automatically include *${profile.email}* on your meeting invitations.\n\nNow tell me who you want to meet, their email, and a time. For example: “Set up a customer call with alex@example.com tomorrow at 3 PM for 30 minutes.”` });
+    pendingLeadQualifications.set(jid, true);
+    await sock.sendMessage(jid, { text: `You’re all set, ${profile.name} ✓ Before we schedule, tell me briefly what you or your company needs help with. For example: “I need a product demo for my sales team next week.”` });
+    return;
+  }
+
+  if (pendingLeadQualifications.get(jid)) {
+    pendingLeadQualifications.delete(jid);
+    await database.saveLeadProfile(jid, { useCase: text, notes: `Captured from WhatsApp: ${text}` });
+    await database.setLifecycleStage(jid, 'qualifying');
+    await sock.sendMessage(jid, { text: 'Thanks — I’ve noted that. I can now help you schedule the right conversation. Send the meeting topic, attendee email, date, time, and duration.' });
     return;
   }
 
@@ -555,7 +609,8 @@ async function handleIncoming(sock, message) {
     const events = Array.isArray(pending) ? pending : [pending];
     await sock.sendMessage(jid, { text: `Creating ${events.length === 1 ? 'it' : `${events.length} reminder blocks`} in your calendar…` });
     try {
-      for (const event of events) await createInCalendar(event);
+      const workspace = await database.workspaceForJid(jid);
+      for (const event of events) await createInCalendar(event, workspace);
       pendingEvents.delete(jid);
       await database.setLifecycleStage(jid, 'meeting_booked');
       for (const event of events) await database.saveCalendarEvent(jid, event);
@@ -594,7 +649,7 @@ async function handleIncoming(sock, message) {
   }
 
   if (normalized === 'help') {
-    await sock.sendMessage(jid, { text: 'To schedule: “Set up a 30-minute product demo with alex@example.com tomorrow at 3 PM.”\n\nI’ll show the details first. Nothing is created or sent until you reply *confirm*.' });
+    await sock.sendMessage(jid, { text: 'I can capture your enquiry, collect contact details, and arrange a meeting. To schedule: “Set up a 30-minute product demo with alex@example.com tomorrow at 3 PM.”\n\nI’ll show the details first. Nothing is created or sent until you reply *confirm*.' });
     return;
   }
 

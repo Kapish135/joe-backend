@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "workspace:create": "node scripts/provision-workspace.mjs"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc13",
