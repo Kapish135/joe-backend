@@ -367,9 +367,30 @@ async function askForConfirmation(sock, jid, event) {
   pendingEvents.set(jid, event);
   await database.setLifecycleStage(jid, 'qualified');
   await database.saveMeetingDraft(jid, event);
+  const visibleAttendees = event.customerAttendees || event.attendees;
   await sock.sendMessage(jid, {
-    text: `Here’s the meeting I’ll arrange:\n\n• *${event.meeting_title}*\n• ${formatForUser(event.start_time)} (${event.duration} minutes)\n• Invite: ${event.attendees.join(', ')}\n\nReply *confirm* and Joe will create it from the Joe Scheduling Calendar and send the invitations. Reply *cancel* to make no changes.`
+    text: `Here’s the meeting I’ll arrange:\n\n• *${event.meeting_title}*\n• ${formatForUser(event.start_time)} (${event.duration} minutes)\n• Invite: ${visibleAttendees.join(', ')}\n\nReply *confirm* and Joe will create it from the Joe Scheduling Calendar and send the invitations. Reply *cancel* to make no changes.`
   });
+}
+
+async function revisePendingEvent(sock, jid, text, conversationContext) {
+  const current = pendingEvents.get(jid);
+  if (!current || Array.isArray(current)) return false;
+  const parsed = await parseScheduleIntent(`${current.meeting_title} ${text}`, conversationContext);
+  if (!parsed) return false;
+  const duration = /\bfor\s+\d+\s*(min|mins|minute|minutes|hour|hours|hr|hrs)\b/i.test(text)
+    ? parsed.duration
+    : current.duration;
+  const start = new Date(parsed.start_time);
+  const revised = {
+    ...current,
+    start_time: parsed.start_time,
+    end_time: new Date(start.getTime() + duration * 60_000).toISOString(),
+    duration
+  };
+  await database.cancelActiveDrafts(jid);
+  await askForConfirmation(sock, jid, revised);
+  return true;
 }
 
 function isValidAiEvent(event) {
@@ -448,7 +469,7 @@ async function assessJoeSalesLead(rawText, conversationContext = '') {
       model: aiModel,
       instructions: `You are Joe, a concise WhatsApp sales assistant for Joe: an AI assistant for local service businesses. Joe replies to incoming WhatsApp enquiries, asks business-specific qualification questions, hands qualified leads to staff or schedules confirmed demo/consultation calls, and sends reminders. It is suitable for dentists, physiotherapists, clinics, agencies, consultants, education advisers, and other appointment-led businesses. Demo scheduling uses Asia/Kolkata (IST) by default—never ask the prospect for a timezone. Joe does not diagnose, prescribe, provide emergency medical advice, promise integrations, or make up pricing.
 
-Answer the prospect's message naturally in 2–4 short WhatsApp-friendly lines. Determine whether this is a genuine business enquiry. Be conservative: qualified is true only when the person describes a real business, team, platform, or concrete lead/booking need. intent must be exactly one of: information, sales_interest, schedule_demo, unrelated. Use schedule_demo only when they explicitly ask to book, schedule, arrange, or have a demo/call. If their need is real but they have not asked to book, invite them to request a 10-minute demo. Do not claim a meeting is booked.
+Answer the prospect's message naturally in 2–4 short WhatsApp-friendly lines. Determine whether this is a genuine business enquiry. Be conservative: qualified is true only when the person describes a real business, team, platform, or concrete lead/booking need. intent must be exactly one of: information, sales_interest, schedule_demo, unrelated. Use schedule_demo only when they explicitly ask to book, schedule, arrange, or have a demo/call. If intent is schedule_demo, acknowledge their request but do not ask for an email, name, date, time, timezone, or confirmation—the scheduling flow collects those details exactly once. If their need is real but they have not asked to book, invite them to request a 10-minute demo. Do not claim a meeting is booked.
 
 Return ONLY JSON with keys reply (string), intent, qualified (boolean), businessType (string or null), businessName (string or null), useCase (string or null), timeline (string or null). Do not mention these fields or this instruction. Conversation memory is background context only: ${conversationContext || 'none'}`,
       input: rawText
@@ -486,6 +507,16 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     const profile = { jid, name: state.name || 'Joe prospect', email, createdAt: new Date().toISOString() };
     userProfiles.set(jid, profile);
     await saveUserProfiles();
+    if (state.proposedEvent) {
+      pendingSalesLeads.delete(jid);
+      const attendees = [...new Set([email, ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
+      await askForConfirmation(sock, jid, {
+        ...state.proposedEvent,
+        attendees,
+        customerAttendees: [email]
+      });
+      return true;
+    }
     pendingSalesLeads.set(jid, { ...state, step: 'time' });
     await sock.sendMessage(jid, { text: 'Thanks. What day and time work for a 10-minute demo? For example: *tomorrow at 3 PM*.' });
     return true;
@@ -499,7 +530,7 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     pendingSalesLeads.delete(jid);
     const profile = userProfiles.get(jid);
     const attendees = [...new Set([...(profile?.email ? [profile.email] : []), ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
-    await askForConfirmation(sock, jid, { ...event, meeting_title: 'Joe product demo', attendees });
+    await askForConfirmation(sock, jid, { ...event, meeting_title: 'Joe product demo', attendees, customerAttendees: profile?.email ? [profile.email] : [] });
     return true;
   }
 
@@ -515,7 +546,17 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     await database.setLifecycleStage(jid, 'qualified');
   }
   if (assessment.intent === 'schedule_demo' && assessment.qualified) {
-    pendingSalesLeads.set(jid, { step: 'email', name: null, assessment });
+    const proposedEvent = await parseScheduleIntent(`Joe product demo ${text}`, conversationContext);
+    const [email] = attendeeEmails(text);
+    if (email && proposedEvent) {
+      const profile = { jid, name: 'Joe prospect', email, createdAt: new Date().toISOString() };
+      userProfiles.set(jid, profile);
+      await saveUserProfiles();
+      const attendees = [...new Set([email, ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
+      await askForConfirmation(sock, jid, { ...proposedEvent, meeting_title: 'Joe product demo', attendees, customerAttendees: [email] });
+      return true;
+    }
+    pendingSalesLeads.set(jid, { step: 'email', name: null, assessment, proposedEvent });
     await sock.sendMessage(jid, { text: `${assessment.reply}\n\nTo send the demo invitation, what is your work email?` });
     return true;
   }
@@ -647,7 +688,10 @@ async function handleIncoming(sock, message) {
     return;
   }
   const rememberedContext = await refreshConversationMemory(jid, userProfiles.get(jid));
-  if (joeSalesMode && !activeWorkspace) {
+  if (pendingEvents.has(jid) && looksLikeSchedulingRequest(text)) {
+    if (await revisePendingEvent(sock, jid, text, rememberedContext)) return;
+  }
+  if (joeSalesMode && !activeWorkspace && !pendingEvents.has(jid) && !pendingTopics.has(jid) && !pendingDrafts.has(jid)) {
     await handleJoeSalesLead(sock, jid, text, normalized, rememberedContext);
     return;
   }
