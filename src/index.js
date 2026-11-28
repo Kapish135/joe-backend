@@ -583,9 +583,9 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     }
     pendingSalesLeads.set(jid, { step: 'email', name: null, assessment, proposedEvent });
     const nextStep = proposedEvent
-      ? 'To send the demo invitation, what is your work email?'
-      : 'To schedule it, please send your *work email* and a *preferred day and time*. You can also include your business type so I can tailor the demo title. For example: “Dental clinic, me@clinic.com, tomorrow at 3 PM.”';
-    await sock.sendMessage(jid, { text: `${assessment.reply}\n\n${nextStep}` });
+      ? 'Great — I can arrange a 10-minute demo. What work email should receive the invitation?'
+      : 'Great — I can arrange a 10-minute demo. Please send your *work email* and a *preferred day and time*. For example: “me@company.com, tomorrow at 3 PM.”';
+    await sock.sendMessage(jid, { text: nextStep });
     return true;
   }
   await sock.sendMessage(jid, { text: assessment.reply });
