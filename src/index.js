@@ -453,6 +453,21 @@ function cleanSalesReply(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
 }
 
+function demoMeetingTitle(assessment = {}) {
+  const businessType = cleanSalesReply(assessment.businessType);
+  return businessType ? `Joe demo — ${businessType}` : 'Joe product demo';
+}
+
+function asTenMinuteDemo(event, assessment) {
+  const start = new Date(event.start_time);
+  return {
+    ...event,
+    meeting_title: demoMeetingTitle(assessment),
+    duration: 10,
+    end_time: new Date(start.getTime() + 10 * 60_000).toISOString()
+  };
+}
+
 async function assessJoeSalesLead(rawText, conversationContext = '') {
   const fallback = {
     reply: 'Joe helps businesses reply to WhatsApp enquiries, qualify leads, schedule confirmed conversations, and send reminders. What kind of business do you run, and where do enquiries currently get missed?',
@@ -469,7 +484,7 @@ async function assessJoeSalesLead(rawText, conversationContext = '') {
       model: aiModel,
       instructions: `You are Joe, a concise WhatsApp sales assistant for Joe: an AI assistant for local service businesses. Joe replies to incoming WhatsApp enquiries, asks business-specific qualification questions, hands qualified leads to staff or schedules confirmed demo/consultation calls, and sends reminders. It is suitable for dentists, physiotherapists, clinics, agencies, consultants, education advisers, and other appointment-led businesses. Demo scheduling uses Asia/Kolkata (IST) by default—never ask the prospect for a timezone. Joe does not diagnose, prescribe, provide emergency medical advice, promise integrations, or make up pricing.
 
-Answer the prospect's message naturally in 2–4 short WhatsApp-friendly lines. Determine whether this is a genuine business enquiry. Be conservative: qualified is true only when the person describes a real business, team, platform, or concrete lead/booking need. intent must be exactly one of: information, sales_interest, schedule_demo, unrelated. Use schedule_demo only when they explicitly ask to book, schedule, arrange, or have a demo/call. If intent is schedule_demo, acknowledge their request but do not ask for an email, name, date, time, timezone, or confirmation—the scheduling flow collects those details exactly once. If their need is real but they have not asked to book, invite them to request a 10-minute demo. Do not claim a meeting is booked.
+Answer the prospect's message naturally in 2–4 short WhatsApp-friendly lines. Determine whether this is a genuine business enquiry. Be conservative: qualified is true only when the person describes a real business, team, platform, or concrete lead/booking need. intent must be exactly one of: information, sales_interest, schedule_demo, unrelated. Use schedule_demo only when they explicitly ask to book, schedule, arrange, or have a demo/call. If intent is schedule_demo, acknowledge their request but do not ask for an email, name, date, time, timezone, confirmation, or why they want Joe—the scheduling flow handles the exact fields. If their need is real but they have not asked to book, invite them to request a 10-minute demo. Do not claim a meeting is booked.
 
 Return ONLY JSON with keys reply (string), intent, qualified (boolean), businessType (string or null), businessName (string or null), useCase (string or null), timeline (string or null). Do not mention these fields or this instruction. Conversation memory is background context only: ${conversationContext || 'none'}`,
       input: rawText
@@ -499,19 +514,28 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     return true;
   }
   if (state?.step === 'email') {
+    const currentAssessment = await assessJoeSalesLead(text, conversationContext);
+    const assessment = { ...(state.assessment || {}), ...Object.fromEntries(Object.entries(currentAssessment).filter(([, value]) => value)) };
+    const title = demoMeetingTitle(assessment);
+    const mentionedEvent = await parseScheduleIntent(`${title} ${text}`, conversationContext);
     const [email] = attendeeEmails(text);
     if (!email) {
+      if (mentionedEvent) {
+        pendingSalesLeads.set(jid, { ...state, assessment, proposedEvent: asTenMinuteDemo(mentionedEvent, assessment) });
+      }
       await sock.sendMessage(jid, { text: 'Please send the work email that should receive the demo invitation.' });
       return true;
     }
     const profile = { jid, name: state.name || 'Joe prospect', email, createdAt: new Date().toISOString() };
     userProfiles.set(jid, profile);
     await saveUserProfiles();
-    if (state.proposedEvent) {
+    const proposedEvent = state.proposedEvent || (mentionedEvent ? asTenMinuteDemo(mentionedEvent, assessment) : null);
+    if (proposedEvent) {
       pendingSalesLeads.delete(jid);
       const attendees = [...new Set([email, ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
       await askForConfirmation(sock, jid, {
-        ...state.proposedEvent,
+        ...proposedEvent,
+        meeting_title: title,
         attendees,
         customerAttendees: [email]
       });
@@ -522,7 +546,7 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     return true;
   }
   if (state?.step === 'time') {
-    const event = await parseScheduleIntent(`Joe product demo ${text}`, conversationContext);
+    const event = await parseScheduleIntent(`${demoMeetingTitle(state.assessment)} ${text}`, conversationContext);
     if (!event) {
       await sock.sendMessage(jid, { text: 'Please share a date and time, for example: *tomorrow at 3 PM*.' });
       return true;
@@ -530,7 +554,7 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     pendingSalesLeads.delete(jid);
     const profile = userProfiles.get(jid);
     const attendees = [...new Set([...(profile?.email ? [profile.email] : []), ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
-    await askForConfirmation(sock, jid, { ...event, meeting_title: 'Joe product demo', attendees, customerAttendees: profile?.email ? [profile.email] : [] });
+    await askForConfirmation(sock, jid, { ...asTenMinuteDemo(event, state.assessment), attendees, customerAttendees: profile?.email ? [profile.email] : [] });
     return true;
   }
 
@@ -545,19 +569,23 @@ async function handleJoeSalesLead(sock, jid, text, normalized, conversationConte
     });
     await database.setLifecycleStage(jid, 'qualified');
   }
-  if (assessment.intent === 'schedule_demo' && assessment.qualified) {
-    const proposedEvent = await parseScheduleIntent(`Joe product demo ${text}`, conversationContext);
+  if (assessment.intent === 'schedule_demo') {
+    const parsedEvent = await parseScheduleIntent(`${demoMeetingTitle(assessment)} ${text}`, conversationContext);
+    const proposedEvent = parsedEvent ? asTenMinuteDemo(parsedEvent, assessment) : null;
     const [email] = attendeeEmails(text);
     if (email && proposedEvent) {
       const profile = { jid, name: 'Joe prospect', email, createdAt: new Date().toISOString() };
       userProfiles.set(jid, profile);
       await saveUserProfiles();
       const attendees = [...new Set([email, ...(salesCalendarEmail ? [salesCalendarEmail] : [])])];
-      await askForConfirmation(sock, jid, { ...proposedEvent, meeting_title: 'Joe product demo', attendees, customerAttendees: [email] });
+      await askForConfirmation(sock, jid, { ...proposedEvent, attendees, customerAttendees: [email] });
       return true;
     }
     pendingSalesLeads.set(jid, { step: 'email', name: null, assessment, proposedEvent });
-    await sock.sendMessage(jid, { text: `${assessment.reply}\n\nTo send the demo invitation, what is your work email?` });
+    const nextStep = proposedEvent
+      ? 'To send the demo invitation, what is your work email?'
+      : 'To schedule it, please send your *work email* and a *preferred day and time*. You can also include your business type so I can tailor the demo title. For example: “Dental clinic, me@clinic.com, tomorrow at 3 PM.”';
+    await sock.sendMessage(jid, { text: `${assessment.reply}\n\n${nextStep}` });
     return true;
   }
   await sock.sendMessage(jid, { text: assessment.reply });
